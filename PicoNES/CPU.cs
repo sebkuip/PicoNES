@@ -9,6 +9,15 @@
         byte A;
         byte X;
         byte Y;
+        byte SP;
+
+        // flags
+        bool flag_carry = false;
+        bool flag_zero = false;
+        bool flag_interrupt_disable = false;
+        bool flag_decimal = false;
+        bool flag_overflow = false;
+        bool flag_negative = false;
 
         byte[] RAM = new byte[0x0800];
         byte[] ROM = new byte[0x8000];
@@ -50,6 +59,20 @@
             }
         }
 
+        void PushStack(byte value)
+                    {
+            Write((ushort)(0x0100 + SP), value);
+            SP--;
+            if (SP < 0x00) SP = 0xFF; // Wrap around if stack pointer goes below 0
+        }
+
+        byte PullStack()
+        {
+            SP++;
+            if (SP > 0xFF) SP = 0x00; // Wrap around if stack pointer goes above 0xFF
+            return Read((ushort)(0x0100 + SP));
+        }
+
         public void Reset()
         {
             if (filepath == null)
@@ -63,6 +86,8 @@
             byte low = Read(0xFFFC);
             byte high = Read(0xFFFD);
             ProgramCounter = (ushort)((high << 8) | low);
+            flag_interrupt_disable = true; // Disable interrupts on reset
+            SP = 0xFD; // Stack Pointer starts at 0xFD
         }
 
         public void LoadROM(string path)
@@ -93,16 +118,22 @@
 
                 case 0xA9: // LDA Immediate
                     A = Read(ProgramCounter);
+                    flag_zero = A == 0;
+                    flag_negative = A > 127;
                     ProgramCounter++;
                     cycles = 2;
                     break;
                 case 0xA2: // LDX Immediate
                     X = Read(ProgramCounter);
+                    flag_zero = X == 0;
+                    flag_negative = X > 127;
                     ProgramCounter++;
                     cycles = 2;
                     break;
                 case 0xA0: // LDY Immediate
                     Y = Read(ProgramCounter);
+                    flag_zero = Y == 0;
+                    flag_negative = Y > 127;
                     ProgramCounter++;
                     cycles = 2;
                     break;
@@ -131,6 +162,8 @@
                         byte address = Read(ProgramCounter);
                         ProgramCounter++;
                         A = Read(address);
+                        flag_zero = A == 0;
+                        flag_negative = A > 127;
                         cycles = 3;
                         break;
                     }
@@ -141,6 +174,8 @@
                         byte high = Read(ProgramCounter);
                         ProgramCounter++;
                         A = Read((ushort)((high << 8) | low));
+                        flag_zero = A == 0;
+                        flag_negative = A > 127;
                         cycles = 4;
                         break;
                     }
@@ -183,6 +218,46 @@
                         break;
                     }
 
+                // Stack manipulation
+                case 0x48: // PHA
+                    {
+                        PushStack(A);
+                        cycles = 3;
+                        break;
+                    }
+                case 0x68: // PLA
+                    {
+                        A = PullStack();
+                        flag_zero = A == 0;
+                        flag_negative = A > 127;
+                        cycles = 4;
+                        break;
+                    }
+
+                // Subroutines
+                case 0x20: // JSR
+                    {
+                        byte low = Read(ProgramCounter);
+                        ProgramCounter++;
+                        byte high = Read(ProgramCounter);
+                        ProgramCounter++;
+                        ushort returnAddress = (ushort)(ProgramCounter - 1);
+                        PushStack((byte)((returnAddress >> 8) & 0xFF)); // Push high byte
+                        PushStack((byte)(returnAddress & 0xFF)); // Push low byte
+                        ProgramCounter = (ushort)((high << 8) | low);
+                        cycles = 6;
+                        break;
+                    }
+                case 0x60: // RTS
+                    {
+                        byte low = PullStack();
+                        byte high = PullStack();
+                        ProgramCounter = (ushort)((high << 8) | low);
+                        ProgramCounter++; // Increment to the next instruction
+                        cycles = 6;
+                        break;
+                    }
+
                 // Jump and Branch
                 case 0x4C: // JMP Absolute
                     {
@@ -192,6 +267,143 @@
                         cycles = 3;
                         break;
                     }
+                case 0x10: // BPL
+                    {                         
+                        sbyte offset = (sbyte)Read(ProgramCounter);
+                        ProgramCounter++;
+                        if (!flag_negative)
+                        {
+                            byte high = (byte)(ProgramCounter >> 8);
+                            ProgramCounter = (ushort)(ProgramCounter + offset);
+                            if (high != (byte)(ProgramCounter >> 8)) cycles++; // Add a cycle if page is crossed
+                            cycles = 3; // Branch taken
+                        }
+                        else
+                        {
+                            cycles = 2; // Branch not taken
+                        }
+                        break;
+                    }
+                case 0x30: // BMI
+                    {
+                        sbyte offset = (sbyte)Read(ProgramCounter);
+                        ProgramCounter++;
+                        if (flag_negative)
+                        {
+                            byte high = (byte)(ProgramCounter >> 8);
+                            ProgramCounter = (ushort)(ProgramCounter + offset);
+                            if (high != (byte)(ProgramCounter >> 8)) cycles++; // Add a cycle if page is crossed
+                            cycles = 3; // Branch taken
+                        }
+                        else
+                        {
+                            cycles = 2; // Branch not taken
+                        }
+                        break;
+                    }
+                case 0x50: // BVC
+                    {
+                        sbyte offset = (sbyte)Read(ProgramCounter);
+                        ProgramCounter++;
+                        if (!flag_overflow)
+                        {
+                            byte high = (byte)(ProgramCounter >> 8);
+                            ProgramCounter = (ushort)(ProgramCounter + offset);
+                            if (high != (byte)(ProgramCounter >> 8)) cycles++; // Add a cycle if page is crossed
+                            cycles = 3; // Branch taken
+                        }
+                        else
+                        {
+                            cycles = 2; // Branch not taken
+                        }
+                        break;
+                    }
+                case 0x70: // BVS
+                    {
+                        sbyte offset = (sbyte)Read(ProgramCounter);
+                        ProgramCounter++;
+                        if (flag_overflow)
+                        {
+                            byte high = (byte)(ProgramCounter >> 8);
+                            ProgramCounter = (ushort)(ProgramCounter + offset);
+                            if (high != (byte)(ProgramCounter >> 8)) cycles++; // Add a cycle if page is crossed
+                            cycles = 3; // Branch taken
+                        }
+                        else
+                        {
+                            cycles = 2; // Branch not taken
+                        }
+                        break;
+                    }
+                case 0x90: // BCC
+                    {
+                        sbyte offset = (sbyte)Read(ProgramCounter);
+                        ProgramCounter++;
+                        if (!flag_carry)
+                        {
+                            byte high = (byte)(ProgramCounter >> 8);
+                            ProgramCounter = (ushort)(ProgramCounter + offset);
+                            if (high != (byte)(ProgramCounter >> 8)) cycles++; // Add a cycle if page is crossed
+                            cycles = 3; // Branch taken
+                        }
+                        else
+                        {
+                            cycles = 2; // Branch not taken
+                        }
+                        break;
+                    }
+                case 0xB0: // BCS
+                    {
+                        sbyte offset = (sbyte)Read(ProgramCounter);
+                        ProgramCounter++;
+                        if (flag_carry)
+                        {
+                            byte high = (byte)(ProgramCounter >> 8);
+                            ProgramCounter = (ushort)(ProgramCounter + offset);
+                            if (high != (byte)(ProgramCounter >> 8)) cycles++; // Add a cycle if page is crossed
+                            cycles = 3; // Branch taken
+                        }
+                        else
+                        {
+                            cycles = 2; // Branch not taken
+                        }
+                        break;
+                    }
+                case 0xD0: // BNE
+                    {
+                        sbyte offset = (sbyte)Read(ProgramCounter);
+                        ProgramCounter++;
+                        if (!flag_zero)
+                        {
+                            byte high = (byte)(ProgramCounter >> 8);
+                            ProgramCounter = (ushort)(ProgramCounter + offset);
+                            if (high != (byte)(ProgramCounter >> 8)) cycles++; // Add a cycle if page is crossed
+                            cycles = 3; // Branch taken
+                        }
+                        else
+                        {
+                            cycles = 2; // Branch not taken
+                        }
+                        break;
+                    }
+                case 0xF0: // BEQ
+                    {
+                        sbyte offset = (sbyte)Read(ProgramCounter);
+                        ProgramCounter++;
+                        if (flag_zero)
+                        {
+                            byte high = (byte)(ProgramCounter >> 8);
+                            ProgramCounter = (ushort)(ProgramCounter + offset);
+                            if (high != (byte)(ProgramCounter >> 8)) cycles++; // Add a cycle if page is crossed
+                            cycles = 3; // Branch taken
+                        }
+                        else
+                        {
+                            cycles = 2; // Branch not taken
+                        }
+                        break;
+                    }
+
                 default:
                     throw new NotImplementedException($"Opcode {opcode:X2} not implemented.");
             }
