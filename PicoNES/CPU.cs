@@ -42,6 +42,21 @@
             }
 
         }
+        ushort ReadAbsolute()
+        {
+            byte low = Read(ProgramCounter);
+            ProgramCounter++;
+            byte high = Read((ushort)(ProgramCounter));
+            ProgramCounter++;
+            return (ushort)((high << 8) | low);
+        }
+
+        ushort ReadZeroPage()
+        {
+            ushort address = ReadZeroPage();
+            ProgramCounter++;
+            return address;
+        }
 
         void Write(ushort address, byte value)
         {
@@ -141,7 +156,7 @@
                 // Store and load accumulator
                 case 0x85: // STA Zero Page 
                     {
-                        byte address = Read(ProgramCounter);
+                        ushort address = ReadZeroPage();
                         ProgramCounter++;
                         Write(address, A);
                         cycles = 3;
@@ -149,17 +164,14 @@
                     }
                 case 0x8D: // STA Absolute
                     {
-                        byte low = Read(ProgramCounter);
-                        ProgramCounter++;
-                        byte high = Read(ProgramCounter);
-                        ProgramCounter++;
-                        Write((ushort)((high << 8) | low), A);
+                        ushort address = ReadAbsolute();
+                        Write(address, A);
                         cycles = 4;
                         break;
                     }
                 case 0xA5: // LDA Zero Page
                     {
-                        byte address = Read(ProgramCounter);
+                        ushort address = ReadZeroPage();
                         ProgramCounter++;
                         A = Read(address);
                         flag_zero = A == 0;
@@ -169,11 +181,8 @@
                     }
                 case 0xAD: // LDA Absolute
                     {
-                        byte low = Read(ProgramCounter);
-                        ProgramCounter++;
-                        byte high = Read(ProgramCounter);
-                        ProgramCounter++;
-                        A = Read((ushort)((high << 8) | low));
+                        ushort address = ReadAbsolute();
+                        A = Read(address);
                         flag_zero = A == 0;
                         flag_negative = A > 127;
                         cycles = 4;
@@ -183,7 +192,7 @@
                 // Store X and Y registers
                 case 0x86: // STX Zero Page
                     {
-                        byte address = Read(ProgramCounter);
+                        ushort address = ReadZeroPage();
                         ProgramCounter++;
                         Write(address, X);
                         cycles = 3;
@@ -191,17 +200,14 @@
                     }
                 case 0x8E: // STX Absolute
                     {
-                        byte low = Read(ProgramCounter);
-                        ProgramCounter++;
-                        byte high = Read(ProgramCounter);
-                        ProgramCounter++;
-                        Write((ushort)((high << 8) | low), X);
+                        ushort address = ReadAbsolute();
+                        Write(address, X);
                         cycles = 4;
                         break;
                     }
                 case 0x84: // STY Zero Page
                     {
-                        byte address = Read(ProgramCounter);
+                        ushort address = ReadZeroPage();
                         ProgramCounter++;
                         Write(address, Y);
                         cycles = 3;
@@ -209,12 +215,46 @@
                     }
                 case 0x8C: // STY Absolute
                     {
-                        byte low = Read(ProgramCounter);
-                        ProgramCounter++;
-                        byte high = Read(ProgramCounter);
-                        ProgramCounter++;
-                        Write((ushort)((high << 8) | low), Y);
+                        ushort address = ReadAbsolute();
+                        Write(address, Y);
                         cycles = 4;
+                        break;
+                    }
+
+                // Arithmetic
+                case 0x0A: // ASL Accumulator
+                    {
+                        flag_carry = (A & 0x80) != 0; // Set carry if bit 7 is set
+                        A <<= 1;
+                        flag_zero = A == 0;
+                        flag_negative = A > 127;
+                        ProgramCounter++;
+                        cycles = 2;
+                        break;
+                    }
+                case 0x06: // ASL Zero Page
+                    {
+                        ushort address = ReadZeroPage();
+                        ProgramCounter++;
+                        byte value = Read(address);
+                        flag_carry = (value & 0x80) != 0; // Set carry if bit 7 is set
+                        value <<= 1;
+                        Write(address, value);
+                        flag_zero = value == 0;
+                        flag_negative = value > 127;
+                        cycles = 5;
+                        break;
+                    }
+                case 0x0E: // ASL Absolute
+                    {
+                        ushort address = ReadAbsolute();
+                        byte value = Read(address);
+                        flag_carry = (value & 0x80) != 0; // Set carry if bit 7 is set
+                        value <<= 1;
+                        Write(address, value);
+                        flag_zero = value == 0;
+                        flag_negative = value > 127;
+                        cycles = 6;
                         break;
                     }
 
@@ -233,18 +273,44 @@
                         cycles = 4;
                         break;
                     }
+                case 0x08: // PHP
+                    {
+                        byte status = 0;
+                        if (flag_carry) status |= 0x01;
+                        if (flag_zero) status |= 0x02;
+                        if (flag_interrupt_disable) status |= 0x04;
+                        if (flag_decimal) status |= 0x08;
+                        status |= 0x10; // Unused bit, always set
+                        status |= 0x20; // Unused bit, always set
+                        if (flag_overflow) status |= 0x40;
+                        if (flag_negative) status |= 0x80;
+                        PushStack(status);
+                        cycles = 3;
+                        break;
+                    }
+                case 0x28: // PLP
+                    {
+                        byte status = PullStack();
+                        flag_carry = (status & 0x01) != 0;
+                        flag_zero = (status & 0x02) != 0;
+                        flag_interrupt_disable = (status & 0x04) != 0;
+                        flag_decimal = (status & 0x08) != 0;
+                        // Bit 4 is ignored
+                        // Bit 5 is ignored
+                        flag_overflow = (status & 0x40) != 0;
+                        flag_negative = (status & 0x80) != 0;
+                        cycles = 3;
+                        break;
+                    }
 
                 // Subroutines
                 case 0x20: // JSR
                     {
-                        byte low = Read(ProgramCounter);
-                        ProgramCounter++;
-                        byte high = Read(ProgramCounter);
-                        ProgramCounter++;
+                        ushort address = ReadAbsolute();
                         ushort returnAddress = (ushort)(ProgramCounter - 1);
                         PushStack((byte)((returnAddress >> 8) & 0xFF)); // Push high byte
                         PushStack((byte)(returnAddress & 0xFF)); // Push low byte
-                        ProgramCounter = (ushort)((high << 8) | low);
+                        ProgramCounter = address;
                         cycles = 6;
                         break;
                     }
@@ -261,9 +327,8 @@
                 // Jump and Branch
                 case 0x4C: // JMP Absolute
                     {
-                        byte low = Read(ProgramCounter);
-                        byte high = Read((ushort)(ProgramCounter + 1));
-                        ProgramCounter = (ushort)((high << 8) | low);
+                        ushort address = ReadAbsolute();
+                        ProgramCounter = address);
                         cycles = 3;
                         break;
                     }
@@ -401,6 +466,139 @@
                         {
                             cycles = 2; // Branch not taken
                         }
+                        break;
+                    }
+
+                // Increment and Decrement
+                case 0xE8: // INX
+                    {
+                        X++;
+                        flag_zero = X == 0;
+                        flag_negative = X > 127;
+                        cycles = 2;
+                        break;
+                    }
+                case 0xCA: // DEX
+                    {
+                        X--;
+                        flag_zero = X == 0;
+                        flag_negative = X > 127;
+                        cycles = 2;
+                        break;
+                    }
+                case 0xC8: // INY
+                    {
+                        Y++;
+                        flag_zero = Y == 0;
+                        flag_negative = Y > 127;
+                        cycles = 2;
+                        break;
+                    }
+                case 0x88: // DEY
+                    {
+                        Y--;
+                        flag_zero = Y == 0;
+                        flag_negative = Y > 127;
+                        cycles = 2;
+                        break;
+                    }
+
+                // transfers
+                case 0xAA: // TAX
+                    {
+                        X = A;
+                        flag_zero = X == 0;
+                        flag_negative = X > 127;
+                        cycles = 2;
+                        break;
+                    }
+                case 0x8A: // TXA
+                    {
+                        A = X;
+                        flag_zero = A == 0;
+                        flag_negative = A > 127;
+                        cycles = 2;
+                        break;
+                    }
+                case 0xA8: // TAY
+                    {
+                        Y = A;
+                        flag_zero = Y == 0;
+                        flag_negative = Y > 127;
+                        cycles = 2;
+                        break;
+                    }
+                case 0x98: // TYA
+                    {
+                        A = Y;
+                        flag_zero = A == 0;
+                        flag_negative = A > 127;
+                        cycles = 2;
+                        break;
+                    }
+                case 0x9A: // TXS
+                    {
+                        SP = X;
+                        cycles = 2;
+                        break;
+                    }
+                case 0xBA: // TSX
+                    {
+                        X = SP;
+                        flag_zero = X == 0;
+                        flag_negative = X > 127;
+                        cycles = 2;
+                        break;
+                    }
+
+                // Flag setting
+                case 0x38: // SEC
+                    {
+                        flag_carry = true;
+                        cycles = 2;
+                        break;
+                    }
+                case 0x18: // CLC
+                    {
+                        flag_carry = false;
+                        cycles = 2;
+                        break;
+                    }
+                case 0xB8: // CLV
+                    {
+                        flag_overflow = false;
+                        cycles = 2;
+                        break;
+                    }
+                case 0x78: // SEI
+                    {
+                        flag_interrupt_disable = true;
+                        cycles = 2;
+                        break;
+                    }
+                case 0x58: // CLI
+                    {
+                        flag_interrupt_disable = false;
+                        cycles = 2;
+                        break;
+                    }
+                case 0xF8: // SED
+                    {
+                        flag_decimal = true;
+                        cycles = 2;
+                        break;
+                    }
+                case 0xD8: // CLD
+                    {
+                        flag_decimal = false;
+                        cycles = 2;
+                        break;
+                    }
+
+                // No Operation
+                case 0xEA: // NOP
+                    {
+                        cycles = 2;
                         break;
                     }
 
