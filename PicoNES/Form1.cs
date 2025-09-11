@@ -13,6 +13,7 @@ namespace PicoNES
             cpu.LoadROM(@"C:\Users\Sebas\Downloads\NES_roms\4_TheStack.nes");
             cpu.Reset();
             cpu.Run();
+            MessageBox.Show("Done");
         }
     }
 }

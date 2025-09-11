@@ -53,7 +53,7 @@
 
         ushort ReadZeroPage()
         {
-            ushort address = ReadZeroPage();
+            ushort address = Read(ProgramCounter);
             ProgramCounter++;
             return address;
         }
@@ -75,7 +75,7 @@
         }
 
         void PushStack(byte value)
-                    {
+        {
             Write((ushort)(0x0100 + SP), value);
             SP--;
             if (SP < 0x00) SP = 0xFF; // Wrap around if stack pointer goes below 0
@@ -86,6 +86,60 @@
             SP++;
             if (SP > 0xFF) SP = 0x00; // Wrap around if stack pointer goes above 0xFF
             return Read((ushort)(0x0100 + SP));
+        }
+
+        void writeASL(ushort address, byte value)
+        {
+            flag_carry = (value & 0x80) != 0; // Set carry if bit 7 is set
+            value <<= 1;
+            Write(address, value);
+            flag_zero = value == 0;
+            flag_negative = value > 127;
+        }
+
+        void writeLSR(ushort address, byte value)
+        {
+            flag_carry = (value & 0x01) != 0; // Set carry if bit 0 is set
+            value >>= 1;
+            Write(address, value);
+            flag_zero = value == 0;
+            flag_negative = false; // LSR always clears the negative flag
+        }
+
+        void writeROL(ushort address, byte value)
+        {
+            bool oldCarry = flag_carry;
+            flag_carry = (value & 0x80) != 0; // Set carry if bit 7 is set
+            value = (byte)((value << 1) | (oldCarry ? 1 : 0));
+            Write(address, value);
+            flag_zero = value == 0;
+            flag_negative = value > 127;
+        }
+
+        void writeROR(ushort address, byte value)
+        {
+            bool oldCarry = flag_carry;
+            flag_carry = (value & 0x01) != 0; // Set carry if bit 0 is set
+            value = (byte)((value >> 1) | (oldCarry ? 0x80 : 0));
+            Write(address, value);
+            flag_zero = value == 0;
+            flag_negative = value > 127;
+        }
+
+        void writeINC(ushort address, byte value)
+        {
+            value++;
+            Write(address, value);
+            flag_zero = value == 0;
+            flag_negative = value > 127;
+        }
+
+        void writeDEC(ushort address, byte value)
+        {
+            value--;
+            Write(address, value);
+            flag_zero = value == 0;
+            flag_negative = value > 127;
         }
 
         public void Reset()
@@ -119,7 +173,7 @@
         }
 
         private void execute()
-                    {
+        {
             byte opcode = Read(ProgramCounter);
             cycles = 1; // Default cycle count
             ProgramCounter++;
@@ -127,8 +181,8 @@
             {
                 case 0x02: // BRK - Force Interrupt
                     halted = true; // For simplicity, we'll just halt the CPU
-                    break;
-            
+                    return;
+
                 // Load immediates
 
                 case 0xA9: // LDA Immediate
@@ -157,7 +211,6 @@
                 case 0x85: // STA Zero Page 
                     {
                         ushort address = ReadZeroPage();
-                        ProgramCounter++;
                         Write(address, A);
                         cycles = 3;
                         break;
@@ -172,7 +225,6 @@
                 case 0xA5: // LDA Zero Page
                     {
                         ushort address = ReadZeroPage();
-                        ProgramCounter++;
                         A = Read(address);
                         flag_zero = A == 0;
                         flag_negative = A > 127;
@@ -193,7 +245,6 @@
                 case 0x86: // STX Zero Page
                     {
                         ushort address = ReadZeroPage();
-                        ProgramCounter++;
                         Write(address, X);
                         cycles = 3;
                         break;
@@ -208,7 +259,6 @@
                 case 0x84: // STY Zero Page
                     {
                         ushort address = ReadZeroPage();
-                        ProgramCounter++;
                         Write(address, Y);
                         cycles = 3;
                         break;
@@ -235,13 +285,8 @@
                 case 0x06: // ASL Zero Page
                     {
                         ushort address = ReadZeroPage();
-                        ProgramCounter++;
                         byte value = Read(address);
-                        flag_carry = (value & 0x80) != 0; // Set carry if bit 7 is set
-                        value <<= 1;
-                        Write(address, value);
-                        flag_zero = value == 0;
-                        flag_negative = value > 127;
+                        writeASL(address, value);
                         cycles = 5;
                         break;
                     }
@@ -249,11 +294,120 @@
                     {
                         ushort address = ReadAbsolute();
                         byte value = Read(address);
-                        flag_carry = (value & 0x80) != 0; // Set carry if bit 7 is set
-                        value <<= 1;
-                        Write(address, value);
-                        flag_zero = value == 0;
-                        flag_negative = value > 127;
+                        writeASL(address, value);
+                        cycles = 6;
+                        break;
+                    }
+                case 0x2A: // ROL Accumulator
+                    {
+                        bool oldCarry = flag_carry;
+                        flag_carry = (A & 0x80) != 0; // Set carry if bit 7 is set
+                        A = (byte)((A << 1) | (oldCarry ? 1 : 0));
+                        flag_zero = A == 0;
+                        flag_negative = A > 127;
+                        ProgramCounter++;
+                        cycles = 2;
+                        break;
+                    }
+                case 0x26: // ROL Zero Page
+                    {
+                        ushort address = ReadZeroPage();
+                        byte value = Read(address);
+                        writeROL(address, value);
+                        cycles = 5;
+                        break;
+                    }
+                case 0x2E: // ROL Absolute
+                    {
+                        ushort address = ReadAbsolute();
+                        byte value = Read(address);
+                        writeROL(address, value);
+                        cycles = 6;
+                        break;
+                    }
+
+                case 0x4A: // LSR Accumulator
+                    {
+                        flag_carry = (A & 0x01) != 0; // Set carry if bit 0 is set
+                        A >>= 1;
+                        flag_zero = A == 0;
+                        flag_negative = false; // LSR always clears the negative flag
+                        ProgramCounter++;
+                        cycles = 2;
+                        break;
+                    }
+                case 0x46: // LSR Zero Page
+                    {
+                        ushort address = ReadZeroPage();
+                        byte value = Read(address);
+                        writeLSR(address, value);
+                        cycles = 5;
+                        break;
+                    }
+                case 0x4E: // LSR Absolute
+                    {
+                        ushort address = ReadAbsolute();
+                        byte value = Read(address);
+                        writeLSR(address, value);
+                        cycles = 6;
+                        break;
+                    }
+                case 0x6A: // ROR Accumulator
+                    {
+                        bool oldCarry = flag_carry;
+                        flag_carry = (A & 0x01) != 0; // Set carry if bit 0 is set
+                        A = (byte)((A >> 1) | (oldCarry ? 0x80 : 0));
+                        flag_zero = A == 0;
+                        flag_negative = A > 127;
+                        ProgramCounter++;
+                        cycles = 2;
+                        break;
+                    }
+                case 0x66: // ROR Zero Page
+                    {
+                        ushort address = ReadZeroPage();
+                        byte value = Read(address);
+                        writeROR(address, value);
+                        cycles = 5;
+                        break;
+                    }
+                case 0x6E: // ROR Absolute
+                    {
+                        ushort address = ReadAbsolute();
+                        byte value = Read(address);
+                        writeROR(address, value);
+                        cycles = 6;
+                        break;
+                    }
+                case 0xE6: // INC Zero Page
+                    {
+                        ushort address = ReadZeroPage();
+                        byte value = Read(address);
+                        writeINC(address, value);
+                        cycles = 5;
+                        break;
+                    }
+                case 0xEE: // INC Absolute
+                    {
+                        ushort address = ReadAbsolute();
+                        byte value = Read(address);
+                        writeINC(address, value);
+                        cycles = 6;
+                        break;
+                    }
+                case 0xC6: // DEC Zero Page
+                    {
+                        ushort address = ReadZeroPage();
+                        byte value = Read(address);
+                        writeDEC(address, value);
+                        cycles = 5;
+                        break;
+                    }
+                case 0xCE: // DEC Absolute
+                    {
+                        ushort address = ReadAbsolute();
+                        byte value = Read(address);
+                        writeDEC(address, value);
                         cycles = 6;
                         break;
                     }
@@ -328,12 +482,12 @@
                 case 0x4C: // JMP Absolute
                     {
                         ushort address = ReadAbsolute();
-                        ProgramCounter = address);
+                        ProgramCounter = address;
                         cycles = 3;
                         break;
                     }
                 case 0x10: // BPL
-                    {                         
+                    {
                         sbyte offset = (sbyte)Read(ProgramCounter);
                         ProgramCounter++;
                         if (!flag_negative)
